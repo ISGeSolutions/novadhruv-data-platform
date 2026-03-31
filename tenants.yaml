@@ -1,0 +1,34 @@
+# tenants.yaml  [Manual]
+# =======================
+# Defines the tenants to be processed by the pipeline.
+# Each tenant requires:
+#   - tenant_id: unique identifier (used in Parquet partition paths)
+#   - encrypted_connection_string: Fernet-encrypted ODBC connection string
+#   - encryption_key_path: path to the Fernet key file used to decrypt it
+#
+# To generate a key and encrypt a connection string:
+#
+#   from src.utils.encryption import EncryptionUtility
+#   key = EncryptionUtility.generate_key()
+#   EncryptionUtility.save_key(key, "keys/acme.key")
+#   encrypted = EncryptionUtility.encrypt_value(
+#       "DRIVER={ODBC Driver 17 for SQL Server};SERVER=server;DATABASE=mis;UID=user;PWD=secret",
+#       "keys/acme.key"
+#   )
+#   print(encrypted)
+#
+# db_type must be one of: mssql | postgres | mariadb
+#   mssql    — SP call: EXEC <db>.dbo.<sp> @LastRunDate=?, @ReconModeInd=?
+#   postgres — SP call: CALL <db>.<sp>(?, ?)   (schema-name = dbname)
+#   mariadb  — SP call: CALL <db>.<sp>(?, ?)
+
+tenants:
+  - tenant_id: acme
+    db_type: mssql
+    encrypted_connection_string: "gAAAAAB...base64encodedvalue..."
+    encryption_key_path: keys/acme.key
+
+  - tenant_id: globetrotter
+    db_type: mssql
+    encrypted_connection_string: "gAAAAAB...base64encodedvalue..."
+    encryption_key_path: keys/globetrotter.key

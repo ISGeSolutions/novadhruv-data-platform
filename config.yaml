@@ -1,0 +1,36 @@
+# config.yaml  [Manual]
+# =======================
+# Runtime configuration for the novadhruv data pipeline.
+# Place this file in the project root (or pass --config to override the path).
+# Do not commit secrets or connection strings here.
+
+# Root directory for all Parquet output.
+# Partition structure: {data_root}/tenant_id={id}/fact_bookingcountries/BookingMonth=YYYY-MM/
+data_root: /data/novadhruv
+
+# Path to tenants.yaml (relative to working directory or absolute)
+tenants_file: tenants.yaml
+
+# Logging level: DEBUG | INFO | WARNING | ERROR
+# Can also be set via the LOG_LEVEL environment variable (config takes precedence).
+log_level: INFO
+
+# Logging format: json | text
+# json = structured JSON (default, recommended for production)
+# text = human-readable (recommended for local development)
+# Can also be set via the LOG_FORMAT environment variable.
+log_format: json
+
+# Log file path (optional).
+# If omitted, logs go to stdout only (12-factor principle).
+# Can also be set via the LOG_FILE environment variable.
+# log_file: /var/log/novadhruv/pipeline.log
+
+# Snapshot date override (optional).
+# If omitted, defaults to today's date.
+# Useful for backfilling or replaying a specific date.
+# snapshot_date: "2026-03-21"
+
+# Number of days to retain snapshot partitions.
+# Partitions older than this are deleted after each successful snapshot run.
+snapshot_retention_days: 30
