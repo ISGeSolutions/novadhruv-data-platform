@@ -73,16 +73,20 @@ The end goal is to answer questions like:
                      │
                      ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│  snapshot_pipeline.py  — Daily snapshot builder                     │
+│  snapshot_pipeline.py  — Daily snapshot builder + auto-backfill     │
 │                                                                     │
 │  Snapshot A: fact_bookingcountries_snapshot                         │
-│    Filter: BookingDate ≤ today AND DepartureDate ≥ today            │
+│    Filter: BookingDate ≤ SnapshotDate AND DepartureDate ≥ SnapshotDate│
 │    Horizon: RelativeDepartureMonth 1–24                             │
 │    Aggregated by country                                            │
 │                                                                     │
 │  Snapshot B: fact_bookingcountries_snapshot_country_tag             │
 │    = Snapshot A INNER JOIN fact_bookingtags on EnquiryNo            │
 │    Adds TagName dimension                                           │
+│                                                                     │
+│  Auto-backfill: after writing today's snapshot, checks prior-year   │
+│    equivalent dates (same MM-DD, years 1–N) and generates any that  │
+│    are absent — fact data read once and reused across all dates.     │
 │                                                                     │
 │  Written to:                                                        │
 │    {data_root}/tenant_id={id}/fact_bookingcountries_snapshot/       │
@@ -253,6 +257,8 @@ All writes use an **atomic temp-file-then-rename** pattern (`os.replace`). Reade
 ## 8. Snapshot Tables
 
 Snapshots are built daily. Each run is a **full rebuild** for the given SnapshotDate — they are idempotent. Old partitions are pruned after each run using a **multi-year retention policy** (see below).
+
+**Auto-backfill of prior-year dates:** After writing today's snapshot, the pipeline automatically checks whether a snapshot exists for the same calendar date in each of the prior `snapshot_retention_years` years (e.g. running on 24/04/2026 also checks 24/04/2025 through 24/04/2021). Any missing dates are generated in the same run, reusing the already-loaded fact DataFrames. This eliminates the need to manually backfill prior-year Parquet files when deploying the pipeline for the first time or when a date was previously missed. Once generated, a prior-year partition is not regenerated on subsequent runs (existence check on disk).
 
 ### Snapshot A — `fact_bookingcountries_snapshot`
 
@@ -528,7 +534,7 @@ The snapshot tables were intentionally designed with flat, self-describing colum
 
 2. **dhruvlog is always MSSQL:** The tracking database DDL (`create_dhruvlog_tables.sql`) is MSSQL-only. If the infrastructure shifts away from MSSQL entirely, this DDL needs porting.
 
-3. **Snapshot rebuild cost:** Each snapshot run reads all fact partitions for the tenant. As history grows, this becomes more expensive. Partition pruning (`snapshot_retention_days`) only applies to snapshots, not to fact tables.
+3. **Snapshot rebuild cost:** Each snapshot run reads all fact partitions for the tenant once, then reuses those DataFrames for today's snapshot and any auto-backfill dates. As history grows, the single read pass becomes more expensive. Partition pruning (`snapshot_retention_days`) only applies to snapshots, not to fact tables.
 
 4. **Reconciliation is a safety net only:** It uses a separate LastRunDate (`YOYReconPipeline`). If it falls significantly behind the daily pipeline, it will re-process a large volume. It should be run weekly at most.
 

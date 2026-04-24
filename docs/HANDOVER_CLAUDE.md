@@ -26,7 +26,7 @@ A production-grade, multi-tenant Python data pipeline for year-on-year (YOY) boo
 3. `fact_pipeline.py` computes a SHA-256 hash per EnquiryNo and runs Cases A–E (new / unchanged / changed-same-partition / changed-partition-moved / hard-delete).
 4. `parquet_writer.py` atomically writes Polars DataFrames to partitioned Parquet files (temp file → `os.replace`).
 5. `tracking_store.py` writes/reads `dhruvlog.dbo.EnquiryParquetFile` and `dhruvlog.dbo.LastRunTracking` to track state between runs.
-6. `snapshot_pipeline.py` reads all fact partitions, applies the forward-bookings filter (BookingDate ≤ today ≤ DepartureDate), computes `RelativeDepartureMonth`, and writes two aggregated snapshot Parquet files per day.
+6. `snapshot_pipeline.py` reads all fact partitions once, builds Snapshot A and B for today's date, then auto-backfills any prior-year equivalent dates (same MM-DD, years 1–N) that are missing on disk — reusing the already-loaded DataFrames for all dates.
 
 ---
 
@@ -132,6 +132,8 @@ After each run, the pipeline keeps a 30-day window ending on the current snapsho
 
 This ensures same-date-prior-year snapshots survive long enough for YOY comparison. A simple rolling 30-day window would delete prior-year history within a month.
 
+**Auto-backfill:** On each run the pipeline also checks whether a snapshot partition exists for the same calendar day in each prior year. Any missing dates are generated automatically in the same run (fact data is read once and reused). This means the first ever run populates all prior-year anchor dates without any manual intervention. Subsequent daily runs skip this step (partitions already exist). The `run()` return dict includes `backfill_dates_generated` so callers can log how many dates were filled.
+
 ---
 
 ## File map — where things live
@@ -144,7 +146,7 @@ This ensures same-date-prior-year snapshots survive long enough for YOY comparis
 | `src/validation/validator.py` | Validates SP rows before hash computation |
 | `src/tracking/tracking_store.py` | All dhruvlog DB reads/writes |
 | `src/pipeline/fact_pipeline.py` | Cases A–E incremental logic |
-| `src/pipeline/snapshot_pipeline.py` | Snapshot A and B builder |
+| `src/pipeline/snapshot_pipeline.py` | Snapshot A and B builder; auto-backfills missing prior-year dates |
 | `src/io/parquet_writer.py` | Atomic writes; upsert and delete helpers |
 | `src/io/parquet_reader.py` | Reads all BookingMonth partitions for snapshot build |
 | `src/utils/encryption.py` | Fernet encrypt/decrypt with `lru_cache` |

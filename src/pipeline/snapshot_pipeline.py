@@ -28,6 +28,7 @@ Old snapshot partitions are pruned using a multi-year retention policy
 
 import logging
 from datetime import date
+from pathlib import Path
 
 import polars as pl
 
@@ -42,6 +43,26 @@ logger = get_logger(__name__)
 
 SNAPSHOT_TABLE_A = "fact_bookingcountries_snapshot"
 SNAPSHOT_TABLE_B = "fact_bookingcountries_snapshot_country_tag"
+
+
+# ---------------------------------------------------------------------------
+# Snapshot existence check
+# ---------------------------------------------------------------------------
+
+def _snapshot_partition_exists(
+    data_root: str,
+    tenant_id: str,
+    table_name: str,
+    snapshot_date: date,
+) -> bool:
+    """Return True if a data.parquet file exists for this snapshot partition."""
+    return (
+        Path(data_root)
+        / f"tenant_id={tenant_id}"
+        / table_name
+        / f"SnapshotDate={snapshot_date.isoformat()}"
+        / "data.parquet"
+    ).exists()
 
 
 # ---------------------------------------------------------------------------
@@ -260,18 +281,22 @@ class SnapshotPipeline:
 
     def run(self) -> dict:
         """
-        Build Snapshot A and B for the configured SnapshotDate.
+        Build Snapshot A and B for the configured SnapshotDate, then
+        auto-backfill any prior-year equivalent dates that are missing on disk.
 
-        Reads all fact partitions, applies filters, aggregates, writes
-        snapshot partitions, then prunes old ones.
+        Fact partitions are read once and reused across all dates (today +
+        backfill). Prior-year dates are only generated when absent, so reruns
+        are safe and idempotent. Old snapshot partitions are pruned after all
+        writes.
 
         Returns:
-            Summary dict with row counts per snapshot.
+            Summary dict with row counts for today's snapshot and the number
+            of prior-year dates that were backfilled.
         """
         snapshot_date_str = self.snapshot_date.isoformat()
         self.adapter.info(f"Building snapshots for SnapshotDate={snapshot_date_str}")
 
-        # Read fact tables
+        # Read fact tables once — reused for today and all backfill dates
         countries_df = read_all_fact_partitions(
             self.data_root, self.tenant_id, "fact_bookingcountries"
         )
@@ -281,23 +306,22 @@ class SnapshotPipeline:
 
         if countries_df.is_empty():
             self.adapter.warning("fact_bookingcountries is empty — skipping snapshots")
-            return {"snapshot_a_rows": 0, "snapshot_b_rows": 0}
+            return {"snapshot_a_rows": 0, "snapshot_b_rows": 0, "backfill_dates_generated": 0}
 
-        # Build and write Snapshot A
-        snap_a = _build_snapshot_a(countries_df, self.snapshot_date)
-        if not snap_a.is_empty():
-            write_snapshot_partition(
-                snap_a, self.data_root, self.tenant_id, SNAPSHOT_TABLE_A, snapshot_date_str
-            )
-        self.adapter.info(f"Snapshot A: {len(snap_a)} rows")
+        # Build today's snapshot
+        snap_a, snap_b = self._build_and_write(countries_df, tags_df, self.snapshot_date)
 
-        # Build and write Snapshot B
-        snap_b = _build_snapshot_b(countries_df, tags_df, self.snapshot_date)
-        if not snap_b.is_empty():
-            write_snapshot_partition(
-                snap_b, self.data_root, self.tenant_id, SNAPSHOT_TABLE_B, snapshot_date_str
+        # Auto-backfill missing prior-year equivalent dates
+        missing_dates = self._get_missing_prior_year_dates()
+        for prior_date in missing_dates:
+            self.adapter.info(f"Backfilling snapshot for SnapshotDate={prior_date.isoformat()}")
+            self._build_and_write(countries_df, tags_df, prior_date)
+
+        if missing_dates:
+            self.adapter.info(
+                f"Backfilled {len(missing_dates)} prior-year snapshot date(s): "
+                + ", ".join(d.isoformat() for d in missing_dates)
             )
-        self.adapter.info(f"Snapshot B: {len(snap_b)} rows")
 
         # Prune partitions outside retention windows
         for table in [SNAPSHOT_TABLE_A, SNAPSHOT_TABLE_B]:
@@ -306,4 +330,61 @@ class SnapshotPipeline:
                 self.retention_days, self.retention_years, snapshot_date_str,
             )
 
-        return {"snapshot_a_rows": len(snap_a), "snapshot_b_rows": len(snap_b)}
+        return {
+            "snapshot_a_rows": len(snap_a),
+            "snapshot_b_rows": len(snap_b),
+            "backfill_dates_generated": len(missing_dates),
+        }
+
+    def _build_and_write(
+        self,
+        countries_df: pl.DataFrame,
+        tags_df: pl.DataFrame,
+        target_date: date,
+    ) -> tuple[pl.DataFrame, pl.DataFrame]:
+        """Build and write Snapshot A and B for a single target date."""
+        target_date_str = target_date.isoformat()
+
+        snap_a = _build_snapshot_a(countries_df, target_date)
+        if not snap_a.is_empty():
+            write_snapshot_partition(
+                snap_a, self.data_root, self.tenant_id, SNAPSHOT_TABLE_A, target_date_str
+            )
+        self.adapter.info(f"Snapshot A ({target_date_str}): {len(snap_a)} rows")
+
+        snap_b = _build_snapshot_b(countries_df, tags_df, target_date)
+        if not snap_b.is_empty():
+            write_snapshot_partition(
+                snap_b, self.data_root, self.tenant_id, SNAPSHOT_TABLE_B, target_date_str
+            )
+        self.adapter.info(f"Snapshot B ({target_date_str}): {len(snap_b)} rows")
+
+        return snap_a, snap_b
+
+    def _get_missing_prior_year_dates(self) -> list[date]:
+        """
+        Return the subset of prior-year equivalent dates not yet on disk.
+
+        Checks the same calendar day for each of the prior retention_years years.
+        A date is included when either Snapshot A or B partition is absent,
+        so both tables are (re)generated together.
+        """
+        missing: list[date] = []
+        for y in range(1, self.retention_years + 1):
+            prior_year = self.snapshot_date.year - y
+            try:
+                prior_date = date(prior_year, self.snapshot_date.month, self.snapshot_date.day)
+            except ValueError:
+                # Feb 29 in a non-leap year — use Feb 28
+                prior_date = date(prior_year, self.snapshot_date.month, 28)
+
+            a_exists = _snapshot_partition_exists(
+                self.data_root, self.tenant_id, SNAPSHOT_TABLE_A, prior_date
+            )
+            b_exists = _snapshot_partition_exists(
+                self.data_root, self.tenant_id, SNAPSHOT_TABLE_B, prior_date
+            )
+            if not a_exists or not b_exists:
+                missing.append(prior_date)
+
+        return missing
