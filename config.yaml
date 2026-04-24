@@ -31,6 +31,12 @@ log_format: json
 # Useful for backfilling or replaying a specific date.
 # snapshot_date: "2026-03-21"
 
-# Number of days to retain snapshot partitions.
-# Partitions older than this are deleted after each successful snapshot run.
+# Snapshot retention policy.
+# snapshot_retention_days: width of the keep window around each anchor date.
+# snapshot_retention_years: number of prior years to retain alongside the current year.
+# The pipeline keeps one window per year (current + N prior), each window being
+# retention_days wide and anchored on the same calendar date as the snapshot run.
+# Example (30 days, 5 years, run on 2026-04-24):
+#   Keeps: 2026-03-25→2026-04-24, 2025-03-25→2025-04-24, ..., 2021-03-25→2021-04-24
 snapshot_retention_days: 30
+snapshot_retention_years: 5

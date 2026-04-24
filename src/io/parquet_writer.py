@@ -9,7 +9,9 @@ partitions from being visible to readers during an in-progress write.
 """
 
 import os
+import shutil
 import uuid
+from datetime import date, timedelta
 from pathlib import Path
 
 import polars as pl
@@ -232,26 +234,45 @@ def delete_old_snapshot_partitions(
     tenant_id: str,
     table_name: str,
     retention_days: int,
+    retention_years: int,
     snapshot_date: str,
 ) -> None:
     """
-    Delete snapshot partitions older than retention_days.
+    Delete snapshot partitions that fall outside the multi-year retention windows.
 
-    Partitions are named SnapshotDate=YYYY-MM-DD. Any partition whose date
-    is more than retention_days before snapshot_date is deleted.
+    Retention policy: keep a window of retention_days ending on the current
+    snapshot date, and an equivalent window anchored on the same calendar date
+    for each of the prior retention_years years. Partitions outside all windows
+    are deleted.
+
+    Example (retention_days=30, retention_years=5, snapshot_date=2026-04-24):
+        Keeps: 2026-03-25→2026-04-24, 2025-03-25→2025-04-24, ..., 2021-03-25→2021-04-24
+        Deletes: anything between windows or older than the oldest window.
 
     Args:
         data_root: Root data directory.
         tenant_id: Tenant identifier.
         table_name: Snapshot table name.
-        retention_days: Number of days to retain.
+        retention_days: Width of the keep window around each annual anchor date.
+        retention_years: Number of prior years to retain alongside the current year.
         snapshot_date: The current snapshot date (YYYY-MM-DD) as the reference.
     """
-    from datetime import date, timedelta
+    ref_date = date.fromisoformat(snapshot_date)
 
-    cutoff = date.fromisoformat(snapshot_date) - timedelta(days=retention_days)
+    # Build keep windows: one per year from current back to retention_years.
+    # Each window is [anchor - retention_days, anchor] inclusive.
+    keep_windows: list[tuple[date, date]] = []
+    for y in range(retention_years + 1):
+        anchor_year = ref_date.year - y
+        try:
+            anchor = date(anchor_year, ref_date.month, ref_date.day)
+        except ValueError:
+            # Feb 29 in a non-leap year — use Feb 28
+            anchor = date(anchor_year, ref_date.month, 28)
+        window_start = anchor - timedelta(days=retention_days)
+        keep_windows.append((window_start, anchor))
+
     table_dir = Path(data_root) / f"tenant_id={tenant_id}" / table_name
-
     if not table_dir.exists():
         return
 
@@ -266,7 +287,7 @@ def delete_old_snapshot_partitions(
         except ValueError:
             continue
 
-        if partition_date < cutoff:
-            import shutil
+        in_window = any(start <= partition_date <= anchor for start, anchor in keep_windows)
+        if not in_window:
             shutil.rmtree(str(partition_dir))
-            logger.info(f"Deleted old snapshot partition: {partition_dir}")
+            logger.info(f"Deleted snapshot partition outside retention windows: {partition_dir}")

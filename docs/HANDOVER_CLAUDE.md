@@ -117,6 +117,21 @@ Same as A plus `TagName`.
 
 **Financial year:** Aug–Jul. `BookingFY` and `DepartureFY` are strings like `"2025-2026"`.
 
+### Snapshot retention policy
+
+Two config parameters control retention:
+
+| Parameter | Default | Meaning |
+|-----------|---------|---------|
+| `snapshot_retention_days` | 30 | Width of the keep window around each anchor date |
+| `snapshot_retention_years` | 5 | Number of prior years to retain |
+
+After each run, the pipeline keeps a 30-day window ending on the current snapshot date, plus the equivalent 30-day window for each of the prior 5 years. Snapshots outside all windows are deleted.
+
+**Example — run on 24/04/2026:** keeps 25/03→24/04 for 2026, 2025, 2024, 2023, 2022, and 2021. Dates between windows (e.g. 25/04/2025 → 24/03/2026) are deleted.
+
+This ensures same-date-prior-year snapshots survive long enough for YOY comparison. A simple rolling 30-day window would delete prior-year history within a month.
+
 ---
 
 ## File map — where things live
@@ -141,6 +156,7 @@ Same as A plus `TagName`.
 | `tenants.yaml` | Tenant definitions (encrypted connection strings + db_type) |
 | `sql/create_dhruvlog_tables.sql` | DDL — run once to set up dhruvlog |
 | `docs/ARCHITECTURE.md` | Full architecture document for humans |
+| `docs/YOY_QUERY_PATTERNS.md` | DuckDB YOY query patterns — overall and by country (top N + Others) |
 
 ---
 

@@ -22,7 +22,8 @@ RelativeDepartureMonth is computed at snapshot build time:
 Horizon: only rows where RelativeDepartureMonth is between 1 and 24 inclusive.
 
 Each run is a full rebuild for the given SnapshotDate (idempotent).
-Old snapshot partitions are pruned to snapshot_retention_days.
+Old snapshot partitions are pruned using a multi-year retention policy
+(snapshot_retention_days window per year, snapshot_retention_years prior years).
 """
 
 import logging
@@ -237,7 +238,8 @@ class SnapshotPipeline:
     Builds daily snapshot partitions for a single tenant.
 
     Each run creates a fresh SnapshotDate=YYYY-MM-DD partition for both
-    Snapshot A and B, then prunes old partitions beyond retention_days.
+    Snapshot A and B, then prunes partitions outside the multi-year
+    retention windows.
     """
 
     def __init__(
@@ -246,12 +248,14 @@ class SnapshotPipeline:
         data_root: str,
         snapshot_date: date,
         retention_days: int,
+        retention_years: int,
         adapter: logging.LoggerAdapter,
     ) -> None:
         self.tenant_id = tenant_id
         self.data_root = data_root
         self.snapshot_date = snapshot_date
         self.retention_days = retention_days
+        self.retention_years = retention_years
         self.adapter = adapter
 
     def run(self) -> dict:
@@ -295,11 +299,11 @@ class SnapshotPipeline:
             )
         self.adapter.info(f"Snapshot B: {len(snap_b)} rows")
 
-        # Prune old partitions
+        # Prune partitions outside retention windows
         for table in [SNAPSHOT_TABLE_A, SNAPSHOT_TABLE_B]:
             delete_old_snapshot_partitions(
                 self.data_root, self.tenant_id, table,
-                self.retention_days, snapshot_date_str,
+                self.retention_days, self.retention_years, snapshot_date_str,
             )
 
         return {"snapshot_a_rows": len(snap_a), "snapshot_b_rows": len(snap_b)}

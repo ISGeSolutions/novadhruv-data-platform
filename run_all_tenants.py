@@ -102,6 +102,7 @@ def run_tenant(
         data_root=data_root,
         snapshot_date=snapshot_date,
         retention_days=config.get("snapshot_retention_days", 30),
+        retention_years=config.get("snapshot_retention_years", 5),
         adapter=adapter,
     )
     snap_counts = snap_pipeline.run()

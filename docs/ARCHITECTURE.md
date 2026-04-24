@@ -87,7 +87,7 @@ The end goal is to answer questions like:
 │  Written to:                                                        │
 │    {data_root}/tenant_id={id}/fact_bookingcountries_snapshot/       │
 │      SnapshotDate=YYYY-MM-DD/data.parquet                           │
-│    (old partitions pruned after retention_days)                     │
+│    (old partitions pruned per multi-year retention windows)         │
 └────────────────────┬────────────────────────────────────────────────┘
                      │
                      ▼
@@ -252,7 +252,7 @@ All writes use an **atomic temp-file-then-rename** pattern (`os.replace`). Reade
 
 ## 8. Snapshot Tables
 
-Snapshots are built daily. Each run is a **full rebuild** for the given SnapshotDate — they are idempotent. Old partitions are pruned after `snapshot_retention_days` (default 30).
+Snapshots are built daily. Each run is a **full rebuild** for the given SnapshotDate — they are idempotent. Old partitions are pruned after each run using a **multi-year retention policy** (see below).
 
 ### Snapshot A — `fact_bookingcountries_snapshot`
 
@@ -280,6 +280,32 @@ Same as Snapshot A plus a TagName dimension. Built by INNER JOINing `fact_bookin
 **Measures come from `fact_bookingcountries`** (country-distributed values), NOT from `fact_bookingtags`. Bookings with no tags are excluded from Snapshot B.
 
 **Aggregated by:** everything in Snapshot A + TagName
+
+### Retention Policy
+
+The retention policy is designed for **year-on-year comparison**, not a simple rolling window.
+
+Two configuration parameters control it:
+
+| Parameter | Default | Meaning |
+|-----------|---------|---------|
+| `snapshot_retention_days` | 30 | Width of the keep window around each anchor date |
+| `snapshot_retention_years` | 5 | Number of prior years to retain (in addition to the current year) |
+
+After each run, the pipeline keeps a 30-day window anchored on the current snapshot date, and an equivalent 30-day window anchored on the same calendar date for each of the prior 5 years. Everything outside these windows is deleted.
+
+**Example — run on 24/04/2026, retention_days=30, retention_years=5:**
+
+| Year | Keep window |
+|------|-------------|
+| 2026 (current) | 25/03/2026 → 24/04/2026 |
+| 2025 | 25/03/2025 → 24/04/2025 |
+| 2024 | 25/03/2024 → 24/04/2024 |
+| 2023 | 25/03/2023 → 24/04/2023 |
+| 2022 | 25/03/2022 → 24/04/2022 |
+| 2021 | 25/03/2021 → 24/04/2021 |
+
+Snapshots between windows (e.g. 25/04/2025 → 24/03/2026) are deleted, as are snapshots older than the oldest window. This ensures the same-date-prior-year snapshot is always available for YOY comparison at any point within the 30-day current window.
 
 ---
 
@@ -369,7 +395,8 @@ log_level: INFO                   # DEBUG | INFO | WARNING | ERROR
 log_format: json                  # json | text
 # log_file: /var/log/...          # Optional; stdout only if omitted
 # snapshot_date: "2026-03-21"     # Override today's date (backfill)
-snapshot_retention_days: 30       # Snapshot partitions retained
+snapshot_retention_days: 30       # Width of keep window around each anchor date
+snapshot_retention_years: 5       # Prior years to retain for YOY comparison
 ```
 
 ### `tenants.yaml` (per-tenant config — secrets encrypted)
@@ -460,6 +487,7 @@ novadhruv-data-platform/
 └── docs/
     ├── ARCHITECTURE.md            # This document
     ├── HANDOVER_CLAUDE.md         # Claude AI session handover file
+    ├── YOY_QUERY_PATTERNS.md      # DuckDB YOY query patterns (overall + by country)
     └── Generate Multi-Tenant Python Data Pipeline AI Prompt.md  # Original spec
 ```
 
