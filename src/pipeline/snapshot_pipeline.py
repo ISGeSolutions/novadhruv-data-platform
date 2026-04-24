@@ -361,6 +361,31 @@ class SnapshotPipeline:
 
         return snap_a, snap_b
 
+    def build_for_date(
+        self,
+        countries_df: pl.DataFrame,
+        tags_df: pl.DataFrame,
+        target_date: date,
+    ) -> tuple[int, int]:
+        """
+        Build and write Snapshot A and B for target_date using pre-loaded fact
+        DataFrames. Both partitions are skipped when they already exist on disk.
+        Returns (snapshot_a_rows, snapshot_b_rows); both 0 means skipped.
+
+        Designed for the backfill script: fact data is loaded once per tenant
+        and passed here for each date, avoiding repeated disk reads.
+        """
+        a_exists = _snapshot_partition_exists(
+            self.data_root, self.tenant_id, SNAPSHOT_TABLE_A, target_date
+        )
+        b_exists = _snapshot_partition_exists(
+            self.data_root, self.tenant_id, SNAPSHOT_TABLE_B, target_date
+        )
+        if a_exists and b_exists:
+            return (0, 0)
+        snap_a, snap_b = self._build_and_write(countries_df, tags_df, target_date)
+        return (len(snap_a), len(snap_b))
+
     def _get_missing_prior_year_dates(self) -> list[date]:
         """
         Return the subset of prior-year equivalent dates not yet on disk.

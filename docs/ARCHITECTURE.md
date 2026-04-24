@@ -1,6 +1,6 @@
 # novadhruv-data-platform — Architecture Document
 
-**Version:** 2026-03-31
+**Version:** 2026-04-24
 **Status:** Phase 1 complete. Phase 2 (DuckDB + LLM query interface) not yet built.
 
 ---
@@ -403,6 +403,12 @@ log_format: json                  # json | text
 # snapshot_date: "2026-03-21"     # Override today's date (backfill)
 snapshot_retention_days: 30       # Width of keep window around each anchor date
 snapshot_retention_years: 5       # Prior years to retain for YOY comparison
+
+# Backfill — used only by Manual/backfill_snapshots.py (never by the daily pipeline)
+backfill:
+  enabled: false
+  from_date: "2021-04-24"         # Inclusive start — 5 years back from go-live
+  to_date:   "2026-04-23"         # Inclusive end   — yesterday
 ```
 
 ### `tenants.yaml` (per-tenant config — secrets encrypted)
@@ -441,6 +447,19 @@ python Manual/reconciliation_job.py --tenant acme   # single tenant
 
 Uses `@ReconModeInd=1` and its own `YOYReconPipeline` LastRunDate, independent of the daily pipeline. Processes through the same Cases A–E logic.
 
+### Historical backfill (go-live / one-time)
+```bash
+# 1. Set backfill.enabled: true in config.yaml and review from_date / to_date
+# 2. Run:
+python Manual/backfill_snapshots.py
+python Manual/backfill_snapshots.py --tenant acme   # single tenant
+python Manual/backfill_snapshots.py --config /path/to/config.yaml
+```
+
+Generates Snapshot A and B Parquet files for every date in `backfill.from_date → backfill.to_date`. Reads all fact partitions **once per tenant** and reuses them across all dates. Partitions already on disk are skipped, so the script is safe to re-run. A single updating progress line is shown in the console; press **x** to abort gracefully (the current date finishes before the script stops).
+
+No database connection is required — the backfill reads only from Parquet files on disk. The fact tables must be populated by the daily pipeline before running the backfill.
+
 ---
 
 ## 14. Logging
@@ -470,7 +489,8 @@ novadhruv-data-platform/
 ├── sql/
 │   └── create_dhruvlog_tables.sql # Run once to set up dhruvlog DB
 ├── Manual/
-│   └── reconciliation_job.py      # Weekly recon job (run manually or via scheduler)
+│   ├── reconciliation_job.py      # Weekly recon job (run manually or via scheduler)
+│   └── backfill_snapshots.py      # One-time historical backfill (go-live)
 ├── src/
 │   ├── models/
 │   │   └── tenant.py              # TenantConfig dataclass

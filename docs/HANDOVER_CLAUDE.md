@@ -154,6 +154,7 @@ This ensures same-date-prior-year snapshots survive long enough for YOY comparis
 | `run_all_tenants.py` | Production entry point |
 | `main.py` | Single-tenant debug runner |
 | `Manual/reconciliation_job.py` | Weekly recon job (ReconModeInd=1) |
+| `Manual/backfill_snapshots.py` | One-time historical snapshot backfill (go-live) |
 | `config.yaml` | Runtime config (data_root, log settings, retention) |
 | `tenants.yaml` | Tenant definitions (encrypted connection strings + db_type) |
 | `sql/create_dhruvlog_tables.sql` | DDL — run once to set up dhruvlog |
@@ -188,6 +189,10 @@ python main.py --tenant acme
 # Weekly reconciliation
 python Manual/reconciliation_job.py
 python Manual/reconciliation_job.py --tenant acme
+
+# Historical backfill (run once at go-live — set backfill.enabled: true in config.yaml first)
+python Manual/backfill_snapshots.py
+python Manual/backfill_snapshots.py --tenant acme
 ```
 
 ---
